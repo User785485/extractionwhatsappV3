@@ -100,63 +100,80 @@ class UnifiedExtractor:
         return "Contact_Inconnu"
     
     def _extract_messages(self, soup, contact_name: str):
-        """Extrait tous les messages du HTML"""
-        # Pattern pour les messages
-        date_pattern = re.compile(r'(\d{4}/\d{2}/\d{2})\s+(\d{2}:\d{2})')
-        
-        # Parcourir les éléments
-        messages = []
-        for msg_div in soup.find_all('div', class_=['message', 'msg']):
+        """Extrait tous les messages du HTML WhatsApp"""
+        # Chercher tous les messages
+        for p_tag in soup.find_all('p'):
             try:
-                # Déterminer la direction (reçu ou envoyé)
-                is_received = 'received' in msg_div.get('class', []) or 'from' in msg_div.get('class', [])
-                is_sent = 'sent' in msg_div.get('class', []) or 'to' in msg_div.get('class', [])
+                # Vérifier la classe CSS
+                css_class = p_tag.get('class', [''])[0] if p_tag.get('class') else ''
                 
-                direction = 'received' if is_received else 'sent' if is_sent else 'unknown'
+                # Déterminer la direction
+                direction = 'unknown'
+                if 'triangle-isosceles' in css_class:
+                    if any(x in css_class for x in ['2', '3']):
+                        direction = 'sent'
+                    else:
+                        direction = 'received'
                 
-                # Trouver la date/heure
-                date_div = msg_div.find('div', class_=['date', 'time'])
+                # Extraire date/heure depuis un élément précédent
+                date_elem = p_tag.find_previous('p', class_='date')
                 date_str = ""
                 time_str = ""
-                
-                if date_div and date_div.text:
-                    date_match = date_pattern.search(date_div.text)
+                if date_elem:
+                    date_match = re.search(r'(\d{4}/\d{2}/\d{2})\s+(\d{2}:\d{2})', date_elem.text)
                     if date_match:
                         date_str = date_match.group(1)
                         time_str = date_match.group(2)
                 
-                # Trouver le contenu
-                content_div = msg_div.find('div', class_=['text', 'content'])
-                content = content_div.text.strip() if content_div else ""
+                # Extraire le contenu
+                font_tag = p_tag.find('font')
+                content = font_tag.text if font_tag else p_tag.text
                 
-                # Vérifier si c'est un audio
-                is_audio = msg_div.find('audio') is not None or 'audio' in msg_div.get('class', [])
-                
-                if is_audio:
-                    # Extraire le chemin audio s'il existe
-                    audio_elem = msg_div.find('audio')
-                    audio_path = ""
-                    if audio_elem and audio_elem.get('src'):
-                        audio_path = audio_elem['src']
-                    
-                    # Ajouter l'audio
-                    audio_info = {
-                        'path': audio_path,
-                        'date': date_str,
-                        'time': time_str,
-                        'direction': direction
-                    }
-                    self.data_manager.add_audio(contact_name, audio_info)
-                else:
-                    # Ajouter le message texte
+                # Ajouter le message
+                if content and content.strip():
                     message = {
                         'date': date_str,
                         'time': time_str,
-                        'content': content,
+                        'content': content.strip(),
                         'direction': direction,
                         'type': 'text'
                     }
                     self.data_manager.add_message(contact_name, message)
                     
             except Exception as e:
-                print(f"[ERREUR] Extraction message: {e}")
+                continue
+        
+        # Chercher les audios dans les tables
+        for table in soup.find_all('table'):
+            try:
+                # Vérifier si c'est un audio
+                if 'opus' in str(table) or 'audio' in str(table):
+                    # Extraire le chemin
+                    a_tag = table.find('a', href=True)
+                    if a_tag:
+                        audio_path = a_tag['href']
+                        
+                        # Date depuis l'élément précédent
+                        date_elem = table.find_previous('p', class_='date')
+                        date_str = ""
+                        time_str = ""
+                        if date_elem:
+                            date_match = re.search(r'(\d{4}/\d{2}/\d{2})\s+(\d{2}:\d{2})', date_elem.text)
+                            if date_match:
+                                date_str = date_match.group(1)
+                                time_str = date_match.group(2)
+                        
+                        # Direction depuis la classe CSS
+                        css_class = table.get('class', [''])[0] if table.get('class') else ''
+                        direction = 'sent' if any(x in css_class for x in ['2', '3']) else 'received'
+                        
+                        audio_info = {
+                            'path': audio_path,
+                            'date': date_str,
+                            'time': time_str,
+                            'direction': direction
+                        }
+                        self.data_manager.add_audio(contact_name, audio_info)
+                        
+            except Exception as e:
+                continue
